@@ -1,3 +1,4 @@
+# %% 
 # 2022.09.12
 # bulid a timegan model from scratch
 
@@ -5,7 +6,7 @@
 import torch
 device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu") # 单GPU或者CPU
 
-
+# %% 
 # 1. 导入库
 # %matplotlib inline
 import pandas as pd
@@ -199,8 +200,8 @@ D.load_state_dict(torch.load(f"/data112/zengbw/Code_MSRA/Results/trained_models/
 
 # Evaluation
 def generate(X):
-    for i in range(30):
-        Y_pred = X.float()
+    Y_pred = X.float()
+    for i in range(20):
         y_pred = G(Y_pred[:,-30:].float()).detach()   # 取倒数30个数
         # 将预测的 y_pred 替换掉原有序列的最后一个
         Y_pred = torch.cat((Y_pred, y_pred), 1)   
