@@ -1,35 +1,37 @@
-# %% 
 # 2022.09.12
 # bulid a timegan model from scratch
 
+# 2022.09.18
+# change according meeting at 09.15
+
+
 # 0. 指定GPU
 import torch
-device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu") # 单GPU或者CPU
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu") # 单GPU或者CPU
 
-# %% 
 # 1. 导入库
-# %matplotlib inline
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 import matplotlib.pyplot as plt
 # import seaborn as sns
 
-import torch
+# import torch
 from torch import nn
 from torch.utils.data import TensorDataset, DataLoader
 from torch.nn import functional as F
 torch.manual_seed(0) 
 
-from sklearn.preprocessing import MinMaxScaler
-from d2l import torch as d2l
+# from sklearn.preprocessing import MinMaxScaler
+# from d2l import torch as d2l
 import random
-from sklearn.manifold import TSNE 
-from sklearn.decomposition import PCA
+# from sklearn.manifold import TSNE 
+# from sklearn.decomposition import PCA
 # import statsmodels.api as sm
 
 # 导入自己写的库
 from dataset import data_preprocess
-from models import Generator, Discriminator
+from models import Generator, Discriminator, set_requires_grad
 
 plt.rcParams["figure.figsize"] = (10, 5) # 指定plot的图片规格
 
@@ -42,7 +44,7 @@ data_path = "/data112/zengbw/Code_MSRA/Dataset/Stock_debug/sz300007.csv"
 
 batch_size = 128  # 批量大小
 
-z_size = 24       # 输入噪声维度   (用不上)
+# z_size = 24       # 输入噪声维度   (用不上)
 
 latent_size = 24  # 隐藏层维度
 
@@ -58,8 +60,8 @@ BCE_loss = nn.BCEWithLogitsLoss().to(device)
 # dataset
 # input:X   shape:[数据条数, 序列长度, 特征维度]
 X, Y = data_preprocess(data_path, sequence_length)
-X = X.squeeze(-1)
-Y = Y.squeeze(-1)
+# X = X.squeeze(-1)
+# Y = Y.squeeze(-1)
 X = X.to(device)
 Y = Y.to(device)
 
@@ -73,46 +75,49 @@ train_loader = DataLoader(train_data, shuffle=True, batch_size=batch_size, drop_
 
 # 查看维度: Shape of input (X) and output (y)
 for _X_, y in train_loader:
-    print(_X_.shape, y.shape)   # torch.Size([128, 30, 1]) torch.Size([128, 31, 1])
+    print("X.shape, y.shape:", _X_.shape, y.shape)   # torch.Size([128, 30, 1]) torch.Size([128, 31, 1])
     break
 
 
 # 实例化网络
-G = Generator(sequence_length, latent_size, num_layers)
-D = Discriminator(sequence_length+1, latent_size, num_layers) 
+Gen = Generator(input_size, latent_size, num_layers)
+Dis = Discriminator(input_size, latent_size, num_layers) 
 
 # 送入GPU
-G = G.to(device)
-D = D.to(device)
+Gen = Gen.to(device)
+Dis = Dis.to(device)
 
 # 优化器
-G_optimiser = torch.optim.Adam(G.parameters(), lr=lr)
-D_optimiser = torch.optim.Adam(D.parameters(), lr=lr)
+G_optimiser = torch.optim.Adam(Gen.parameters(), lr=lr)
+D_optimiser = torch.optim.Adam(Dis.parameters(), lr=lr)
 
 # 重置梯度
 def reset_gradients():
-    G.zero_grad()
-    D.zero_grad()
+    Gen.zero_grad()
+    Dis.zero_grad()
 
 
 # 定义训练过程
 def train_D(X, Y):
     # # Generate noise vector  暂时不需要噪声
     # Z = torch.rand(X.shape[0], sequence_length, z_size).to(device)
-
+    set_requires_grad([Dis], True)  
+    set_requires_grad([Gen], False) 
     # 更新D
     # 1. 训练前梯度置零
     reset_gradients()
     # 2. 前向传播
-    y_pred = G(X.float()).detach()
+    y_pred = Gen(X.float()).detach()  # 防止更新G
 
     # 将预测的 y_pred 替换掉原有序列的最后一个
     Y_fake = torch.cat((Y[:,:-1], y_pred), 1) 
-    real_logit = D(Y)  
-    fake_logit = D(Y_fake)
+    real_logit = Dis(Y)  
+    fake_logit = Dis(Y_fake)
 
     # 3. 计算loss
     D_loss = BCE_loss(real_logit, torch.ones_like(real_logit).to(device)) + BCE_loss(fake_logit, torch.zeros_like(fake_logit).to(device))
+    #
+    D_optimiser.zero_grad()
     # 4. loss反向传播
     D_loss.backward()
     # 5. 优化器
@@ -123,32 +128,39 @@ def train_D(X, Y):
 
 
 def train_G(X, Y):
+    set_requires_grad([Gen], True)  
+    set_requires_grad([Dis], False) 
     # 更新G
     # 1. 训练前梯度置零
     reset_gradients()
     # 2. 前向传播
-    y_pred = G(X.float())
+    y_pred = Gen(X.float())
     Y_fake = torch.cat((Y[:,:-1], y_pred), 1) 
-    real_logit = D(Y)  
-    fake_logit = D(Y_fake)
+    # real_logit = D(Y)  
+    fake_logit = Dis(Y_fake)
     # 3. 计算loss
     G_ad_loss = MSE_loss(fake_logit, torch.ones_like(fake_logit).to(device))
-    G_p_loss = L1_loss(Y, Y_fake)     # p = 1
-    # G_dp_loss = L1_loss(sgn(y_t+1 - y_t), sgn(y_pred - y_t))  torch.sign(a)
-    G_loss = G_ad_loss + G_p_loss
+    G_p_loss = L1_loss(Y[:,-1], Y_fake[:,-1])     # p = 1   # 还真的会除以序列长度31
+    # G_dp_loss = L1_loss(torch.sgn(Y[:,-1] - Y[:,-2]), torch.sgn(Y_fake[:,-1] - Y[:,-2]))  # torch.sign(a)
+    G_loss = G_p_loss + 100 * G_p_loss  #  + G_dp_loss
+    #
+    G_optimiser.zero_grad()
     # 4. loss反向传播
     G_loss.backward()
     # 5. 优化器
     G_optimiser.step()
 
-    return G_loss
+    return G_loss, G_ad_loss, G_p_loss
 
 
 
 def train_joint(train_loader, num_epochs):
     G_losses = []
+    G_ad_losses = []
+    G_p_losses = []
     D_losses = []
-    for epoch in range(1, num_epochs+1):
+    print(" Start to train G and D !")
+    for epoch in tqdm(range(1, num_epochs+1)):
         for X, Y in train_loader:
             
             for _ in range(2):
@@ -156,11 +168,13 @@ def train_joint(train_loader, num_epochs):
                 Train discriminator half as often as 
                 the generator and autoencoder
                 '''
-                G_loss = train_G(X, Y)
+                G_loss, G_ad_loss, G_p_loss = train_G(X, Y)
             
             D_loss = train_D(X, Y)
 
         G_losses.append(G_loss)
+        G_ad_losses.append(G_ad_loss)
+        G_p_losses.append(G_p_loss)
         D_losses.append(D_loss)
     
     return G_losses, D_losses
@@ -188,21 +202,21 @@ print("Train finished!")
 # Save model parameters
 
 save = "__base__"
-torch.save(G.state_dict(), f"/data112/zengbw/Code_MSRA/Results/trained_models/G{save}")
-torch.save(D.state_dict(), f"/data112/zengbw/Code_MSRA/Results/trained_models/D{save}")
+torch.save(Gen.state_dict(), f"/data112/zengbw/Code_MSRA/Results/trained_models/G{save}")
+torch.save(Dis.state_dict(), f"/data112/zengbw/Code_MSRA/Results/trained_models/D{save}")
 
 # Load model parameters
 load = "__base__"
 
-G.load_state_dict(torch.load(f"/data112/zengbw/Code_MSRA/Results/trained_models/G{save}"))
-D.load_state_dict(torch.load(f"/data112/zengbw/Code_MSRA/Results/trained_models/D{save}"))
+Gen.load_state_dict(torch.load(f"/data112/zengbw/Code_MSRA/Results/trained_models/G{save}"))
+Dis.load_state_dict(torch.load(f"/data112/zengbw/Code_MSRA/Results/trained_models/D{save}"))
 
 
 # Evaluation
 def generate(X):
     Y_pred = X.float()
     for i in range(20):
-        y_pred = G(Y_pred[:,-30:].float()).detach()   # 取倒数30个数
+        y_pred = Gen(Y_pred[:,-30:].float()).detach()   # 取倒数30个数
         # 将预测的 y_pred 替换掉原有序列的最后一个
         Y_pred = torch.cat((Y_pred, y_pred), 1)   
         # Y_pred = torch.cat((Y[:,:-1], y_pred), 1) 
@@ -248,3 +262,5 @@ print("Test finished !")
 
 
 
+
+# %%

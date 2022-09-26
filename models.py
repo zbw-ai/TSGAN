@@ -8,7 +8,8 @@ from torch import nn
 class Generator(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers):
         super().__init__()
-        self.GRU = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)
+        self.batch = nn.BatchNorm1d(30, affine=False)
+        self.GRU = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)   # reshape 3D
         self.linear = nn.Linear(hidden_size, 1)
         # self.sigmoid = nn.Sigmoid()   # [0,1]  
 
@@ -49,6 +50,8 @@ class Generator(nn.Module):
             o: minibatch of timeseries 
             (batch_size, sequence_length, hidden_size)
         '''
+        # X -> (0,1)
+        X = self.batch(X)
         o, h = self.GRU(X)
         o = self.linear(o)
         # o = self.sigmoid(o)  # [0, 1]
@@ -58,14 +61,13 @@ class Generator(nn.Module):
 # 2. Discriminator
 class Discriminator(nn.Module):
     '''
-        For some reason, 
-        implementations do not use sigmoid activation for the discriminator,
-        and they use BCEWithLogitsLoss instead of BCELoss. 
+        to use BCEWithLogitsLoss instead of BCELoss. 
         Why? For numerical stability: see the first paragraph of 
       https://pytorch.org/docs/stable/generated/torch.nn.BCEWithLogitsLoss.html.
     '''
     def __init__(self, input_size, hidden_size, num_layers):
         super().__init__()
+        self.batch = nn.BatchNorm1d(31, affine=False)
         self.GRU = nn.GRU(input_size, hidden_size, num_layers, batch_first=True)
         self.linear = nn.Linear(hidden_size, 1) 
         self.sigmoid = nn.Sigmoid()   # [0,1]
@@ -98,6 +100,8 @@ class Discriminator(nn.Module):
         Returns:
       o: minibatch of timeseries (batch_size, sequence_length, hidden_size)
         '''
+        # X -> (0,1)
+        X = self.batch(X)
         o, h = self.GRU(X)
         o = self.linear(o)
         o = self.sigmoid(o)
@@ -117,3 +121,16 @@ class Discriminator(nn.Module):
 # Z = torch.rand(feature_size, sequence_length, z_size).to(device)
 # print(Z.shape)
 
+
+def set_requires_grad(nets, requires_grad=False):
+    """Set requies_grad=Fasle for all the networks to avoid unnecessary computations
+    Parameters:
+        nets (network list)   -- a list of networks
+        requires_grad (bool)  -- whether the networks require gradients or not
+    """
+    if not isinstance(nets, list):
+        nets = [nets]
+    for net in nets:
+        if net is not None:
+            for param in net.parameters():
+                param.requires_grad = requires_grad
